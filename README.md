@@ -1,4 +1,4 @@
-[abrir instrumento ✧](https://tuusuario.github.io/dual-live/)
+[abrir instrumento ✧][(https://tuusuario.github.io/dual-live/)](https://nikucode.github.io/dual-live/)
 
 # ✧ dual.live ✧
 
