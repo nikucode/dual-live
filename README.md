@@ -1,3 +1,5 @@
+[abrir instrumento ✧](https://tuusuario.github.io/dual-live/)
+
 # ✧ dual.live ✧
 
 (っ˘ω˘ς )
