@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>dual.live</title>
+
+  <!-- conecto el css -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- 
+este espacio no esta terminado
+
+la idea es que lo podamos construir juntos
+y que podamos jugar con esto como si fuese un instrumento
+-->
+
+<textarea id="editor">
+// puedes cambiar esto y probar cosas
+
+addLayer(() => {
+  background("black")
+})
+
+addLayer(() => {
+  let x = 200 + Math.sin(time * 2) * 100
+  let size = 200 + Math.sin(time * 3) * 40
+
+  drawImage("fondoonwn.jpg", x, 100, size, size)
+})
+</textarea>
+
+<!-- botones -->
+<button onclick="initAudio(); runCode()" style="top:10px;">run</button>
+<button onclick="startMemory()" style="top:50px;">start_memory()</button>
+<button onclick="openSandbox()" style="top:90px;">open_sandbox()</button>
+<button onclick="openManual()" style="top:130px;">open_manual()</button>
+
+<!-- canvas -->
+<canvas id="canvas"></canvas>
+
+<!-- 🎛️ controles en vivo -->
+<div id="controls">
+  <input type="range" id="slider1" min="0" max="100" value="30">
+  <input type="range" id="slider2" min="0" max="100" value="10">
+</div>
+
+<!-- 🌐 manual interactivo -->
+<div id="manual" style="display:none;" onclick="closeManual()">
+  <div id="manualContent" onclick="event.stopPropagation()">
+
+
+    <button onclick="closeManual()">[ cerrar ]</button>
+
+<pre>
+~o( =∩ω∩= )m
+
+bienvenido a este pequeño sistema
+
+este espacio no esta terminado
+la idea es que lo podamos construir juntos
+
+---------------------------------------
+
+( •̀ ω •́ )y como usarlo
+
+▶ presiona "run" para ejecutar codigo
+
+---------------------------------------
+
+(　o=^•ェ•)o visuales
+
+<button onclick="exampleCircle()">[ probar circulo ]</button>
+
+todo ocurre en capas:
+
+addLayer(() => {
+  background("black")
+})
+
+addLayer(() => {
+  circle(300, 200, 50)
+})
+
+---------------------------------------
+
+( *^-^)ρ imagenes
+
+drawImage("fondoonwn.jpg", x, y, w, h)
+
+---------------------------------------
+
+o(≧∀≦)o glitch
+
+glitchImage("fondoonwn.jpg", x, y, w, h, intensidad)
+
+---------------------------------------
+
+(p≧w≦q) tiempo
+
+puedes usar "time" para animar cosas
+
+---------------------------------------
+
+puedes romper todo
+
+de hecho deberias
+
+---------------------------------------
+
+si estas leyendo esto..
+
+holii,,, si llegaste hasta aca, me hace mui feliz >.<
+
+esto lo hice pensando en ti
+</pre>
+
+  </div>
+</div>
+
+<!-- javascript -->
+<script src="main.js"></script>
+
+</body>
+</html>
