@@ -10,6 +10,8 @@ pequeño espacio visual + musical para jugar, experimentar y crear juntos
 
 ## ✦ qué es esto?
 
+un sistema interactivo de visión computacional desarrollado en Python/OpenCV/NumPy, incorporando captura de video, detección de presencia humana, procesamiento de imágenes y máquina de estados para modificar dinámicamente parámetros visuales, es decir; 
+
 un mini instrumento en el navegador donde puedes:
 
 - crear visuales con código
