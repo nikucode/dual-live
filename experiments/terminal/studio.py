@@ -7,11 +7,9 @@ from array import array
 import curses
 from dataclasses import dataclass, replace
 import math
-import os
 from pathlib import Path
 import random
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -26,7 +24,7 @@ EXAMPLE = """# dual.live / sesión inicial (puedes editarla mientras suena)
 bpm 180
 volume 85
 
-# sound nombre onda frecuencia_hz duracion_ms caida_0_a_100
+# sound nombre onda frecuencia_hz duracion_ms caida_0_a_100 [nivel_0_a_100]
 # ondas: sine square saw triangle noise
 sound kick sine 52 320 55
 sound snare noise 1800 160 0
@@ -48,6 +46,7 @@ class Sound:
     hz: float
     tail: int
     sweep: int
+    level: int = 100
 
 
 @dataclass(frozen=True)
@@ -80,20 +79,21 @@ def parse_session(source: str) -> Session:
                 volume = int(parts[1])
                 if not 0 <= volume <= 100:
                     raise ValueError("volume debe estar entre 0 y 100")
-            elif parts[0] == "sound" and len(parts) == 6:
-                _, name, wave_name, hz_text, tail_text, sweep_text = parts
+            elif parts[0] == "sound" and len(parts) in (6, 7):
+                _, name, wave_name, hz_text, tail_text, sweep_text, *level_text = parts
                 if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
                     raise ValueError("nombre inválido; usa letras minúsculas, números y _")
                 if name in sounds:
                     raise ValueError(f"el sonido {name} está repetido")
                 hz, tail, sweep = float(hz_text), int(tail_text), int(sweep_text)
+                level = int(level_text[0]) if level_text else 100
                 if wave_name not in WAVES:
                     raise ValueError("onda desconocida: " + wave_name)
                 if not math.isfinite(hz) or not 20 <= hz <= 12000:
                     raise ValueError("frecuencia debe estar entre 20 y 12000 Hz")
-                if not 20 <= tail <= 2000 or not 0 <= sweep <= 100:
-                    raise ValueError("duración 20–2000 ms; caída 0–100")
-                sounds[name] = Sound(name, wave_name, hz, tail, sweep)
+                if not 20 <= tail <= 2000 or not 0 <= sweep <= 100 or not 0 <= level <= 100:
+                    raise ValueError("duración 20–2000 ms; caída y nivel 0–100")
+                sounds[name] = Sound(name, wave_name, hz, tail, sweep, level)
             elif parts[0] == "track" and len(parts) == 3:
                 _, name, pattern = parts
                 pattern = pattern.lower()
@@ -120,10 +120,35 @@ def format_session(session: Session) -> str:
     sounds = {track.sound.name: track.sound for track in session.tracks}
     lines = ["# dual.live / edita y pulsa l para recargar", f"bpm {session.bpm}", f"volume {session.volume}", ""]
     for sound in sounds.values():
-        lines.append(f"sound {sound.name} {sound.wave} {sound.hz:g} {sound.tail} {sound.sweep}")
+        lines.append(f"sound {sound.name} {sound.wave} {sound.hz:g} {sound.tail} {sound.sweep} {sound.level}")
     lines.append("")
     lines += [f"track {track.sound.name} {track.pattern}" for track in session.tracks]
     return "\n".join(lines) + "\n"
+
+
+def sync_source(source: str, session: Session) -> str:
+    """Refleja controles de la TUI en código, conservando comentarios y orden."""
+    sounds = {track.sound.name: track.sound for track in session.tracks}
+    track_number = 0
+    result = []
+    for line in source.splitlines():
+        body, marker, comment = line.partition("#")
+        parts = body.split()
+        if parts:
+            if parts[0] == "bpm":
+                body = f"bpm {session.bpm}"
+            elif parts[0] == "volume":
+                body = f"volume {session.volume}"
+            elif parts[0] == "sound" and len(parts) >= 2 and parts[1] in sounds:
+                sound = sounds[parts[1]]
+                body = f"sound {sound.name} {sound.wave} {sound.hz:g} {sound.tail} {sound.sweep} {sound.level}"
+            elif parts[0] == "track" and track_number < len(session.tracks):
+                track = session.tracks[track_number]
+                body = f"track {track.sound.name} {track.pattern}"
+                track_number += 1
+        suffix = (" #" + comment) if marker else ""
+        result.append(body.rstrip() + suffix)
+    return "\n".join(result) + "\n"
 
 
 def ensure_session_file(path: Path) -> None:
@@ -158,7 +183,7 @@ def synthesize(sound: Sound) -> array:
             signal = white - lowpass * 0.7
         attack = min(1.0, t / 0.004)
         decay = math.exp(math.log(0.0001) * t / (sound.tail / 1000))
-        out.append(signal * attack * decay * 0.72)
+        out.append(signal * attack * decay * 0.72 * sound.level / 100)
     return out
 
 
@@ -305,13 +330,17 @@ def run_tui(screen, path: Path):
     screen.keypad(True)
     screen.timeout(80)
     lock = threading.Lock()
-    session = parse_session(path.read_text(encoding="utf-8"))
-    focus = "controls"
-    control = 0
+    source = path.read_text(encoding="utf-8")
+    session = parse_session(source)
+    focus = "global"
+    selected = 0
     track_index = 0
     cursor = 0
     help_page = True
-    message = "Bienvenido. Lee la guía y pulsa Enter."
+    editing = False
+    editor_lines: list[str] = []
+    editor_row = editor_col = editor_top = 0
+    message = "Bienvenido. Enter para comenzar."
 
     def current():
         with lock:
@@ -321,7 +350,7 @@ def run_tui(screen, path: Path):
 
     def line(y, text, attr=0):
         height, width = screen.getmaxyx()
-        if y < height and width > 0:
+        if 0 <= y < height and width > 0:
             try:
                 screen.addnstr(y, 0, text.ljust(width - 1), width - 1, attr)
             except curses.error:
@@ -331,49 +360,144 @@ def run_tui(screen, path: Path):
         while True:
             screen.erase()
             height, width = screen.getmaxyx()
-            if height < 20 or width < 60:
-                line(0, "Amplía la terminal a 60 x 20. q: salir")
+            if height < 24 or width < 60:
+                line(0, "Amplía la terminal a 60 x 24. q: salir")
             elif help_page:
-                line(0, "dual.live / primera misión / (=^･ω･^=)", curses.A_BOLD)
-                line(2, "1. Pulsa Enter para entrar y Espacio para escuchar un sonido.")
-                line(4, "2. Pulsa p para tocar las 4 pistas. p otra vez detiene.")
-                line(6, "3. Tab cambia entre controles y pistas. Flechas eligen")
-                line(7, "   BPM/volumen o una pista; ←→ ajustan valor o paso.")
-                line(9, "4. En una pista, x pone golpe y . pone silencio.")
-                line(10, "   El símbolo ^ indica el paso que estás editando.")
-                line(12, "5. Pulsa e para abrir el código en tu editor. Guarda y")
-                line(13, "   vuelve: los cambios se aplican al tocar. l recarga.")
-                line(15, "6. s guarda cambios hechos aquí; ? abre esta guía.")
-                line(17, "Enter: comenzar   q: salir")
+                line(0, "dual.live / tres pasos para empezar / (=^･ω･^=)", curses.A_BOLD)
+                line(3, "1 / ESCUCHA", curses.A_BOLD)
+                line(4, "Pulsa Enter y luego p. Sonarán todas las pistas.")
+                line(7, "2 / CAMBIA UNA PISTA", curses.A_BOLD)
+                line(8, "Pulsa Tab: selecciona PISTAS. ↑↓ elige kick, snare...")
+                line(9, "←→ mueve ^ por 16 pasos; x toca y . calla.")
+                line(12, "3 / CAMBIA SU SONIDO", curses.A_BOLD)
+                line(13, "Pulsa Tab: selecciona SONIDO. ↑↓ elige onda, tono,")
+                line(14, "duración, caída o nivel; ←→ cambia el valor.")
+                line(17, "Tab: GENERAL → PISTAS → SONIDO. j/k y +/- también sirven.")
+                line(18, "e abre código aquí. Ctrl+R aplica; Ctrl+O guarda.")
+                line(20, "Enter: comenzar  |  ?: volver a esta guía  |  q: salir")
+            elif editing:
+                line(0, "dual.live / código de la sesión", curses.A_BOLD)
+                line(1, "Ctrl+R: aplicar  Ctrl+O: guardar  Ctrl+X: volver")
+                line(2, "Error de código: se conserva lo que ya sonaba.")
+                visible = height - 8
+                editor_top = max(0, min(editor_top, editor_row))
+                if editor_row >= editor_top + visible:
+                    editor_top = editor_row - visible + 1
+                for y in range(visible):
+                    index = editor_top + y
+                    if index < len(editor_lines):
+                        line(4 + y, f"{index + 1:3} {editor_lines[index]}", curses.A_REVERSE if index == editor_row else 0)
+                line(height - 3, message)
+                line(height - 2, f"{path}  |  línea {editor_row + 1}, columna {editor_col + 1}")
             else:
                 line(0, "dual.live / estudio de ritmos / (=^･ω･^=)", curses.A_BOLD)
                 line(1, f"{session.bpm} BPM  |  volumen {session.volume}%  |  {len(session.tracks)} pistas  |  sin internet")
-                line(3, "CONTROLES  Tab cambia sección; flechas ajustan")
+                line(3, "GENERAL  Tab cambia sección; ↑↓ elige; ←→ ajusta")
                 for i, (name, value) in enumerate((("BPM", session.bpm), ("Volumen", session.volume))):
-                    line(4 + i, f"{'>' if focus == 'controls' and control == i else ' '} {name:8} {value}", curses.A_REVERSE if focus == "controls" and control == i else 0)
-                line(7, "PISTAS  ↑↓ elige  ←→ mueve  x golpe  . silencio")
-                max_visible = min(len(session.tracks), max(1, height - 17))
+                    chosen = focus == "global" and selected == i
+                    line(4 + i, f"{'>' if chosen else ' '} {name:8} {value}", curses.A_REVERSE if chosen else 0)
+                line(7, "PISTAS  ↑↓ elige  ←→ mueve ^  x golpe  . silencio")
+                max_visible = min(len(session.tracks), 4)
                 start_index = max(0, min(track_index - max_visible + 1, len(session.tracks) - max_visible))
                 for row, index in enumerate(range(start_index, start_index + max_visible)):
                     track = session.tracks[index]
-                    selected = focus == "tracks" and track_index == index
-                    line(8 + row, f"{'>' if selected else ' '} {track.sound.name:10} {' '.join(track.pattern)}", curses.A_REVERSE if selected else 0)
-                marker_y = 8 + track_index - start_index
-                if marker_y < 8 + max_visible and focus == "tracks":
-                    line(8 + max_visible, " " * (13 + 2 * cursor) + "^ paso " + str(cursor + 1))
-                footer = max(14, 9 + max_visible)
-                line(footer, "Espacio escuchar pista | p tocar/detener | e editar código")
-                line(footer + 1, "l recargar | s guardar | ? guía | q salir")
+                    is_active = focus == "tracks" and track_index == index
+                    line(8 + row, f"{'>' if is_active else ' '} {track.sound.name:10} {' '.join(track.pattern)}", curses.A_REVERSE if is_active else 0)
+                if focus == "tracks":
+                    line(12, " " * (13 + 2 * cursor) + "^ paso " + str(cursor + 1))
+                sound = session.tracks[track_index].sound
+                line(14, f"SONIDO / {sound.name}  Tab para editar sus parámetros")
+                parameters = (("Onda", sound.wave), ("Frecuencia", f"{sound.hz:g} Hz"), ("Duración", f"{sound.tail} ms"), ("Caída", f"{sound.sweep}%"), ("Nivel", f"{sound.level}%"))
+                for i, (name, value) in enumerate(parameters):
+                    chosen = focus == "sound" and selected == i
+                    line(15 + i, f"{'>' if chosen else ' '} {name:11} {value}", curses.A_REVERSE if chosen else 0)
+                line(20, "p tocar/detener | Espacio escuchar | e código aquí | s guardar")
+                line(21, "Tab sección | ? guía | l recargar archivo | q salir")
                 if engine.error:
                     message = "Audio: " + engine.error
                 state = f"TOCANDO paso {engine.step + 1}" if engine.playing else "DETENIDO"
-                line(footer + 3, state + " | " + message)
-                line(footer + 4, f"Código: {path}")
+                line(23, state + " | " + message)
+                if height > 24:
+                    line(24, f"Código: {path}")
+            if editing and not help_page and height >= 24 and width >= 60:
+                try:
+                    screen.move(4 + editor_row - editor_top, min(width - 2, 4 + editor_col))
+                except curses.error:
+                    pass
             screen.refresh()
-            key = screen.getch()
+            try:
+                pressed = screen.get_wch()
+            except curses.error:
+                pressed = -1
+            key = ord(pressed) if isinstance(pressed, str) else pressed
             if key == -1:
                 continue
-            if key in (ord("q"), 27):
+            if height < 24 or width < 60:
+                if key == ord("q"):
+                    break
+                continue
+            if editing:
+                if key in (curses.KEY_F5, curses.KEY_F2, 27, 18, 15, 24):
+                    candidate = "\n".join(editor_lines) + "\n"
+                    try:
+                        updated = parse_session(candidate)
+                        with lock:
+                            session = updated
+                        source = candidate
+                        track_index = min(track_index, len(session.tracks) - 1)
+                        message = "Código aplicado. El ritmo continúa."
+                        if key in (curses.KEY_F2, 15):
+                            path.write_text(source, encoding="utf-8")
+                            message = "Código aplicado y guardado."
+                        if key in (27, 24):
+                            editing = False
+                            try:
+                                curses.curs_set(0)
+                            except curses.error:
+                                pass
+                    except (OSError, ValueError) as exc:
+                        message = str(exc) + " | sigue sonando la versión anterior"
+                    continue
+                if key in (curses.KEY_UP, curses.KEY_DOWN):
+                    editor_row = max(0, min(len(editor_lines) - 1, editor_row + (-1 if key == curses.KEY_UP else 1)))
+                    editor_col = min(editor_col, len(editor_lines[editor_row]))
+                elif key in (curses.KEY_LEFT, curses.KEY_RIGHT):
+                    editor_col = max(0, min(len(editor_lines[editor_row]), editor_col + (-1 if key == curses.KEY_LEFT else 1)))
+                elif key == curses.KEY_HOME:
+                    editor_col = 0
+                elif key == curses.KEY_END:
+                    editor_col = len(editor_lines[editor_row])
+                elif key in (10, 13, curses.KEY_ENTER):
+                    rest = editor_lines[editor_row][editor_col:]
+                    editor_lines[editor_row] = editor_lines[editor_row][:editor_col]
+                    editor_lines.insert(editor_row + 1, rest)
+                    editor_row += 1
+                    editor_col = 0
+                elif key in (8, 127, curses.KEY_BACKSPACE):
+                    if editor_col:
+                        text = editor_lines[editor_row]
+                        editor_lines[editor_row] = text[:editor_col - 1] + text[editor_col:]
+                        editor_col -= 1
+                    elif editor_row:
+                        editor_col = len(editor_lines[editor_row - 1])
+                        editor_lines[editor_row - 1] += editor_lines.pop(editor_row)
+                        editor_row -= 1
+                elif key == curses.KEY_DC:
+                    text = editor_lines[editor_row]
+                    if editor_col < len(text):
+                        editor_lines[editor_row] = text[:editor_col] + text[editor_col + 1:]
+                    elif editor_row + 1 < len(editor_lines):
+                        editor_lines[editor_row] += editor_lines.pop(editor_row + 1)
+                elif key == 9:
+                    text = editor_lines[editor_row]
+                    editor_lines[editor_row] = text[:editor_col] + "  " + text[editor_col:]
+                    editor_col += 2
+                elif 32 <= key <= 0x10FFFF:
+                    text = editor_lines[editor_row]
+                    editor_lines[editor_row] = text[:editor_col] + chr(key) + text[editor_col:]
+                    editor_col += 1
+                continue
+            if key == ord("q"):
                 break
             if help_page:
                 if key in (10, 13, curses.KEY_ENTER, ord("?")):
@@ -382,23 +506,36 @@ def run_tui(screen, path: Path):
             if key == ord("?"):
                 help_page = True
             elif key == 9:
-                focus = "tracks" if focus == "controls" else "controls"
-            elif key in (curses.KEY_UP, curses.KEY_DOWN):
-                delta = -1 if key == curses.KEY_UP else 1
-                if focus == "controls":
-                    control = (control + delta) % 2
-                else:
+                focus = {"global": "tracks", "tracks": "sound", "sound": "global"}[focus]
+                selected = 0
+            elif key in (curses.KEY_UP, curses.KEY_DOWN, ord("k"), ord("j")):
+                delta = -1 if key in (curses.KEY_UP, ord("k")) else 1
+                if focus == "tracks":
                     track_index = (track_index + delta) % len(session.tracks)
-            elif key in (curses.KEY_LEFT, curses.KEY_RIGHT):
-                delta = -1 if key == curses.KEY_LEFT else 1
+                else:
+                    selected = (selected + delta) % (2 if focus == "global" else 5)
+            elif key in (curses.KEY_LEFT, curses.KEY_RIGHT, ord("-"), ord("+")):
+                delta = -1 if key in (curses.KEY_LEFT, ord("-")) else 1
                 if focus == "tracks":
                     cursor = (cursor + delta) % 16
-                else:
+                elif focus == "global":
                     with lock:
-                        if control == 0:
+                        if selected == 0:
                             session = replace(session, bpm=max(40, min(300, session.bpm + delta * 5)))
                         else:
                             session = replace(session, volume=max(0, min(100, session.volume + delta * 5)))
+                    source = sync_source(source, session)
+                else:
+                    sound = session.tracks[track_index].sound
+                    if selected == 0:
+                        waves = ("sine", "triangle", "square", "saw", "noise")
+                        new_sound = replace(sound, wave=waves[(waves.index(sound.wave) + delta) % len(waves)])
+                    else:
+                        field, step_size, bounds = (("hz", 5, (20, 12000)), ("tail", 10, (20, 2000)), ("sweep", 5, (0, 100)), ("level", 5, (0, 100)))[selected - 1]
+                        new_sound = replace(sound, **{field: max(bounds[0], min(bounds[1], getattr(sound, field) + delta * step_size))})
+                    with lock:
+                        session = replace(session, tracks=tuple(replace(track, sound=new_sound) if track.sound.name == sound.name else track for track in session.tracks))
+                    source = sync_source(source, session)
             elif key in (ord("x"), ord(".")) and focus == "tracks":
                 with lock:
                     tracks = list(session.tracks)
@@ -406,6 +543,7 @@ def run_tui(screen, path: Path):
                     pattern[cursor] = chr(key)
                     tracks[track_index] = replace(tracks[track_index], pattern="".join(pattern))
                     session = replace(session, tracks=tuple(tracks))
+                source = sync_source(source, session)
                 cursor = (cursor + 1) % 16
             elif key == ord(" "):
                 engine.start(preview_track=track_index)
@@ -419,41 +557,30 @@ def run_tui(screen, path: Path):
                     message = "Pistas sonando; puedes editarlas ahora."
             elif key == ord("l"):
                 try:
-                    loaded = parse_session(path.read_text(encoding="utf-8"))
+                    loaded_source = path.read_text(encoding="utf-8")
+                    loaded = parse_session(loaded_source)
                     with lock:
                         session = loaded
+                    source = loaded_source
                     track_index = min(track_index, len(session.tracks) - 1)
                     message = "Código aplicado desde el siguiente paso."
                 except (OSError, ValueError) as exc:
                     message = str(exc) + " | se conserva la sesión anterior"
             elif key == ord("s"):
                 try:
-                    path.write_text(format_session(session), encoding="utf-8")
+                    path.write_text(source, encoding="utf-8")
                     message = "Sesión guardada en el archivo de código."
                 except OSError as exc:
                     message = str(exc)
             elif key == ord("e"):
-                editor = shlex.split(os.environ.get("EDITOR", "nano"))
-                if not editor or not shutil.which(editor[0]):
-                    editor = ["nvim"] if shutil.which("nvim") else ["nano"]
-                curses.def_prog_mode()
-                curses.endwin()
+                editor_lines = source.splitlines() or [""]
+                editor_row = editor_col = editor_top = 0
+                editing = True
                 try:
-                    result = subprocess.run([*editor, str(path)], check=False)
-                    if result.returncode and editor[0] not in ("nvim", "nano", "vi"):
-                        fallback = "nvim" if shutil.which("nvim") else "nano"
-                        subprocess.run([fallback, str(path)], check=False)
-                finally:
-                    curses.reset_prog_mode()
-                    screen.refresh()
-                try:
-                    loaded = parse_session(path.read_text(encoding="utf-8"))
-                    with lock:
-                        session = loaded
-                    track_index = min(track_index, len(session.tracks) - 1)
-                    message = "Código aplicado desde el siguiente paso."
-                except (OSError, ValueError) as exc:
-                    message = str(exc) + " | se conserva la sesión anterior"
+                    curses.curs_set(1)
+                except curses.error:
+                    pass
+                message = "Edita; Ctrl+R aplica, Ctrl+O guarda, Ctrl+X vuelve."
     finally:
         engine.stop()
 

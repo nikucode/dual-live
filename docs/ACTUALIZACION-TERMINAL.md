@@ -7,7 +7,7 @@ Actualización del 29 de octubre de 2026.
 - Interfaz de terminal con una bienvenida paso a paso y guía reabrible con `?`.
 - Síntesis local de bombo, caja, hi-hat y bajo mediante senoide, diente de sierra y ruido. También se pueden definir ondas cuadradas y triangulares.
 - BPM de 40 a 300, volumen general de 0 a 100 y hasta 12 pistas de 16 pasos.
-- Edición por teclado durante la reproducción y edición de `session.dual` con recarga sin reiniciar el ritmo.
+- Edición por teclado durante la reproducción: pasos de las pistas, forma de onda, frecuencia, duración, caída y nivel de cada sonido. El código de `session.dual` se edita dentro de la misma interfaz y se aplica sin reiniciar el ritmo.
 - Exportación WAV local y taller visual anterior con `--web`.
 - Instalación de un comando en `~/.local/bin` con `install.sh`; no se descargan paquetes al tocar.
 
@@ -20,7 +20,7 @@ sound kick sine 52 320 55
 track kick x...x...x...x.x.
 ```
 
-`sound` define nombre, onda, frecuencia en Hz, duración en ms y caída inicial de frecuencia. `track` asocia un sonido a 16 pasos. Una `x` toca y un `.` calla. Un archivo inválido conserva la sesión anterior y muestra un error con línea cuando es posible.
+`sound` define nombre, onda, frecuencia en Hz, duración en ms, caída inicial de frecuencia y, opcionalmente, nivel propio de 0 a 100. `track` asocia un sonido a 16 pasos. Una `x` toca y un `.` calla. Un archivo inválido conserva la sesión anterior y muestra un error con línea cuando es posible.
 
 ## Próximos pasos útiles
 

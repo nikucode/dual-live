@@ -3,7 +3,7 @@
 bpm 180
 volume 85
 
-# sound nombre onda frecuencia_hz duracion_ms caida_0_a_100
+# sound nombre onda frecuencia_hz duracion_ms caida_0_a_100 [nivel_0_a_100]
 # ondas: sine square saw triangle noise
 sound kick sine 52 320 55
 sound snare noise 1800 160 0

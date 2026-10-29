@@ -1,7 +1,9 @@
 import unittest
 from array import array
 
-from studio import EXAMPLE, RATE, format_session, parse_session, render, synthesize
+from dataclasses import replace
+
+from studio import EXAMPLE, RATE, format_session, parse_session, render, synthesize, sync_source
 
 
 class StudioTests(unittest.TestCase):
@@ -34,6 +36,19 @@ class StudioTests(unittest.TestCase):
                 voice = synthesize(track.sound)
                 self.assertGreater(max(abs(value) for value in voice), 0.1)
                 self.assertLessEqual(max(abs(value) for value in voice), 0.72)
+
+    def test_sound_controls_remain_linked_to_track_and_source(self):
+        session = parse_session(EXAMPLE)
+        kick = replace(session.tracks[0].sound, wave="square", hz=57, level=70)
+        tracks = (replace(session.tracks[0], sound=kick), *session.tracks[1:])
+        changed = replace(session, tracks=tracks)
+        source = sync_source(EXAMPLE, changed)
+        self.assertIn("# dual.live / sesión inicial", source)
+        self.assertIn("sound kick square 57 320 55 70", source)
+        self.assertEqual(parse_session(source), changed)
+        full = synthesize(replace(kick, level=100))
+        quiet = synthesize(replace(kick, level=50))
+        self.assertAlmostEqual(max(abs(v) for v in quiet) * 2, max(abs(v) for v in full), places=5)
 
 
 if __name__ == "__main__":
