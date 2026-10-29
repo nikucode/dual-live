@@ -1,0 +1,17 @@
+# dual.live / sesión inicial (puedes editarla mientras suena)
+# bpm: pulsos por minuto. volume: volumen general de 0 a 100.
+bpm 180
+volume 85
+
+# sound nombre onda frecuencia_hz duracion_ms caida_0_a_100
+# ondas: sine square saw triangle noise
+sound kick sine 52 320 55
+sound snare noise 1800 160 0
+sound hat noise 7000 55 0
+sound bass saw 65 260 0
+
+# track nombre 16_pasos (x toca, . calla)
+track kick x...x...x...x.x.
+track snare ....x.......x...
+track hat x.x.x.x.x.x.x.x.
+track bass x.......x.......

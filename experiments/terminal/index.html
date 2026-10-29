@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>dual.live / taller 00</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header>
+    <div><strong>dual.live</strong> <span class="muted">/ taller 00 / (=^･ω･^=)</span></div>
+    <div class="actions"><button id="play" type="button">[ tocar patrón ]</button><button id="stop" type="button">[ detener ]</button><button id="guide-toggle" type="button" aria-expanded="false">[ guía ]</button></div>
+  </header>
+  <main>
+    <section class="instrument" aria-labelledby="sound-title">
+      <p class="eyebrow">01 / crear sonido</p>
+      <h1 id="sound-title">Un bombo hecho de una onda</h1>
+      <p>Escucha, mueve un control y vuelve a escuchar. La receta se genera en tu equipo.</p>
+      <div class="control"><label for="tone">Tono <span>grave ↔ agudo</span></label><input id="tone" type="range" min="35" max="90" value="52"><output id="tone-value" for="tone"></output></div>
+      <div class="control"><label for="tail">Cola <span>corta ↔ larga</span></label><input id="tail" type="range" min="80" max="800" value="320"><output id="tail-value" for="tail"></output></div>
+      <div class="control"><label for="punch">Golpe <span>redondo ↔ marcado</span></label><input id="punch" type="range" min="0" max="100" value="55"><output id="punch-value" for="punch"></output></div>
+      <div class="actions"><button id="audition" type="button">[ escuchar bombo ]</button><button id="reset" type="button">[ restaurar ]</button><button id="save" type="button">[ guardar receta ]</button></div>
+      <details><summary>ver cómo funciona</summary><p>Una onda senoidal empieza más aguda y baja rápidamente. Su volumen crece al inicio y luego se apaga. El patrón decide cuándo repetir ese sonido.</p><dl><dt>Frecuencia final</dt><dd id="detail-tone"></dd><dt>Duración</dt><dd id="detail-tail"></dd><dt>Caída de frecuencia</dt><dd id="detail-punch"></dd></dl></details>
+    </section>
+    <section class="pattern" aria-labelledby="pattern-title">
+      <p class="eyebrow">02 / decidir cuándo</p>
+      <h2 id="pattern-title">Patrón</h2>
+      <p>Escribe <code>x</code> para un bombo y <code>.</code> para silencio. Los 16 lugares forman una vuelta.</p>
+      <label for="pattern">Una vuelta de 16 pasos</label>
+      <textarea id="pattern" spellcheck="false" rows="3">x . . . x . . . x . . . x . x .</textarea>
+      <p>Tempo fijo: 160 BPM. Cambiar el texto y pulsar «tocar patrón» aplica la nueva vuelta.</p>
+      <p id="status" class="status" role="status" aria-live="polite">Detenido. Pulsa «escuchar bombo» para comenzar.</p>
+    </section>
+    <section class="visual" aria-labelledby="visual-title">
+      <p class="eyebrow">03 / ver la señal</p>
+      <h2 id="visual-title">La onda responde</h2>
+      <canvas id="scope" aria-label="Representación visual aproximada del bombo; el sonido también puede explorarse con los controles" role="img"></canvas>
+      <p class="muted">La línea muestra una aproximación de la receta. El marco pulsa cuando suena el bombo.</p>
+    </section>
+    <aside id="guide" hidden aria-labelledby="guide-title"><h2 id="guide-title">Guía pequeña</h2><p>1. Pulsa «escuchar bombo».</p><p>2. Mueve «cola» y escucha de nuevo. ¿Se apaga antes o después?</p><p>3. En el patrón, cambia un <code>.</code> por <code>x</code> y pulsa «tocar patrón».</p><p><strong>Onda:</strong> forma que se repite y produce un tono. <strong>Hz:</strong> cuántas veces se repite por segundo. <strong>Envolvente:</strong> cómo cambia un sonido mientras dura.</p><p>Más adelante podremos agregar otras ondas, ruido, filtros y sonidos propios. ( •̀ ω •́ )y</p></aside>
+  </main>
+  <footer>hecho para jugar, aprender y seguir construyendo juntos / alex → javi</footer>
+</body>
+</html>

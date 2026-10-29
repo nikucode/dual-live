@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+"""Abre el taller en terminal o, opcionalmente, en el navegador local."""
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+import sys
+import webbrowser
+
+class QuietHandler(SimpleHTTPRequestHandler):
+    def log_message(self, fmt, *args):
+        pass
+
+def web_mode():
+    root = Path(__file__).resolve().parent
+    handler = partial(QuietHandler, directory=str(root))
+    with ThreadingHTTPServer(("127.0.0.1", 0), handler) as server:
+        url = f"http://127.0.0.1:{server.server_port}/"
+        print(f"dual.live / taller 00: {url}")
+        print("Ctrl+C para cerrar el servidor local.")
+        webbrowser.open(url)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+
+
+if __name__ == "__main__":
+    if "--web" in sys.argv:
+        sys.argv.remove("--web")
+        if len(sys.argv) != 1:
+            raise SystemExit("--web no acepta otras opciones")
+        web_mode()
+    else:
+        from studio import main
+        raise SystemExit(main())
