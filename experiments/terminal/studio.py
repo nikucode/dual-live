@@ -6,6 +6,7 @@ import argparse
 from array import array
 import curses
 from dataclasses import dataclass, replace
+from functools import lru_cache
 import math
 from pathlib import Path
 import random
@@ -19,6 +20,7 @@ import wave
 RATE = 44100
 SESSION_PATH = Path.home() / ".config" / "dual-live" / "session.dual"
 WAVES = {"sine", "square", "saw", "triangle", "noise"}
+MAX_HITS_PER_BAR = 64
 EXAMPLE = """# dual.live / sesión inicial (puedes editarla mientras suena)
 # bpm: pulsos por minuto. volume: volumen general de 0 a 100.
 bpm 180
@@ -62,6 +64,81 @@ class Session:
     tracks: tuple[Track, ...]
 
 
+@dataclass(frozen=True)
+class Hit:
+    offset: float
+    velocity: float
+    transpose: int
+
+
+@dataclass(frozen=True)
+class Step:
+    token: str
+    hits: tuple[Hit, ...]
+
+
+def _read_atom(pattern: str, position: int) -> tuple[str, float, int, int]:
+    if position >= len(pattern) or pattern[position] not in "xX.":
+        raise ValueError("usa x, X, . o grupos [xx]")
+    char = pattern[position]
+    end = position + 1
+    transpose = 0
+    if end < len(pattern) and pattern[end] == "{":
+        if char == ".":
+            raise ValueError("un silencio no puede tener tono")
+        closing = pattern.find("}", end + 1)
+        if closing < 0:
+            raise ValueError("falta cerrar {tono}")
+        value = pattern[end + 1:closing]
+        if not re.fullmatch(r"[+-]?\d{1,2}", value):
+            raise ValueError("el tono usa semitonos, por ejemplo x{+7}")
+        transpose = int(value)
+        if not -24 <= transpose <= 24:
+            raise ValueError("el tono debe estar entre -24 y +24 semitonos")
+        end = closing + 1
+    return pattern[position:end], 1.25 if char == "X" else (1.0 if char == "x" else 0.0), transpose, end
+
+
+@lru_cache(maxsize=256)
+def parse_pattern(pattern: str) -> tuple[Step, ...]:
+    """Dieciséis pasos; [..] subdivide un paso sin alargar la vuelta."""
+    steps = []
+    position = 0
+    while position < len(pattern):
+        if pattern[position] == "[":
+            start = position
+            position += 1
+            atoms = []
+            while position < len(pattern) and pattern[position] != "]":
+                token, velocity, transpose, position = _read_atom(pattern, position)
+                atoms.append((token, velocity, transpose))
+                if len(atoms) > 8:
+                    raise ValueError("un grupo admite máximo 8 subpasos")
+            if position >= len(pattern) or len(atoms) < 2:
+                raise ValueError("un grupo [..] necesita cierre y 2 a 8 subpasos")
+            position += 1
+            hits = tuple(Hit(i / len(atoms), velocity, transpose) for i, (_, velocity, transpose) in enumerate(atoms) if velocity)
+            steps.append(Step(pattern[start:position], hits))
+        else:
+            token, velocity, transpose, position = _read_atom(pattern, position)
+            steps.append(Step(token, (Hit(0.0, velocity, transpose),) if velocity else ()))
+        if len(steps) > 16:
+            raise ValueError("el patrón tiene más de 16 pasos")
+    if len(steps) != 16:
+        raise ValueError(f"el patrón necesita 16 pasos; encontré {len(steps)}")
+    return tuple(steps)
+
+
+def step_symbol(step: Step) -> str:
+    if not step.hits:
+        return "."
+    if step.token.startswith("["):
+        return str(len(step.hits)) if len(step.hits) < 10 else "*"
+    if step.hits[0].transpose:
+        return "^"
+    return "X" if step.hits[0].velocity > 1 else "x"
+
+
 def parse_session(source: str) -> Session:
     bpm, volume = 180, 85
     sounds: dict[str, Sound] = {}
@@ -96,9 +173,7 @@ def parse_session(source: str) -> Session:
                 sounds[name] = Sound(name, wave_name, hz, tail, sweep, level)
             elif parts[0] == "track" and len(parts) == 3:
                 _, name, pattern = parts
-                pattern = pattern.lower()
-                if len(pattern) != 16 or any(char not in "x." for char in pattern):
-                    raise ValueError("el patrón necesita 16 caracteres x o .")
+                parse_pattern(pattern)
                 pending.append((name, pattern))
             else:
                 raise ValueError("instrucción desconocida o cantidad incorrecta de valores")
@@ -113,6 +188,9 @@ def parse_session(source: str) -> Session:
         if name not in sounds:
             raise ValueError(f"La pista {name} no tiene una definición sound")
         tracks.append(Track(sounds[name], pattern))
+    total_hits = sum(len(step.hits) for track in tracks for step in parse_pattern(track.pattern))
+    if total_hits > MAX_HITS_PER_BAR:
+        raise ValueError(f"Máximo {MAX_HITS_PER_BAR} golpes por vuelta; encontré {total_hits}")
     return Session(bpm, volume, tuple(tracks))
 
 
@@ -157,17 +235,18 @@ def ensure_session_file(path: Path) -> None:
         path.write_text(EXAMPLE, encoding="utf-8")
 
 
-def synthesize(sound: Sound) -> array:
+def synthesize(sound: Sound, transpose: int = 0) -> array:
     count = round(sound.tail * RATE / 1000)
-    start_hz = sound.hz * 2 ** (sound.sweep * 0.24 / 12)
+    base_hz = min(RATE * 0.45, sound.hz * 2 ** (transpose / 12))
+    start_hz = min(RATE * 0.45, base_hz * 2 ** (sound.sweep * 0.24 / 12))
     glide = min(0.12, sound.tail / 1000 * 0.7)
     phase = 0.0
     lowpass = 0.0
-    rng = random.Random(f"{sound.name}:{sound.hz}:{sound.tail}:{sound.sweep}")
+    rng = random.Random(f"{sound.name}:{base_hz}:{sound.tail}:{sound.sweep}")
     out = array("f")
     for i in range(count):
         t = i / RATE
-        hz = start_hz * (sound.hz / start_hz) ** min(1.0, t / glide)
+        hz = start_hz * (base_hz / start_hz) ** min(1.0, t / glide)
         phase = (phase + hz / RATE) % 1.0
         if sound.wave == "sine":
             signal = math.sin(2 * math.pi * phase)
@@ -196,20 +275,23 @@ def pcm16(samples: array, volume: int) -> bytes:
 
 
 def render(session: Session, bars: int = 2) -> bytes:
-    if bars < 1 or bars > 1000:
-        raise ValueError("--bars debe estar entre 1 y 1000")
+    if bars < 1 or bars > 128:
+        raise ValueError("--bars debe estar entre 1 y 128")
     step_frames = RATE * 60 / session.bpm / 4
     total = math.ceil(16 * bars * step_frames)
     mixed = array("f", [0.0]) * total
-    cache = {track.sound: synthesize(track.sound) for track in session.tracks}
+    cache: dict[tuple[Sound, int], array] = {}
     for step in range(16 * bars):
         start = round(step * step_frames)
         for track in session.tracks:
-            if track.pattern[step % 16] != "x":
-                continue
-            voice = cache[track.sound]
-            for i in range(min(len(voice), total - start)):
-                mixed[start + i] += voice[i]
+            for hit in parse_pattern(track.pattern)[step % 16].hits:
+                hit_start = start + round(hit.offset * step_frames)
+                key = (track.sound, hit.transpose)
+                if key not in cache:
+                    cache[key] = synthesize(track.sound, hit.transpose)
+                voice = cache[key]
+                for i in range(min(len(voice), total - hit_start)):
+                    mixed[hit_start + i] += voice[i] * hit.velocity
     return pcm16(mixed, session.volume)
 
 
@@ -252,16 +334,19 @@ class Engine:
                 stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
             )
             self.process = process
-            voices: list[tuple[array, int]] = []
+            voices: list[tuple[array, int, float]] = []
+            voice_cache: dict[tuple[Sound, int], array] = {}
+            cache_session = None
             frame = 0
             next_step = 0
             next_frame = 0
+            next_frame_exact = 0.0
             preview_end = 0
             if self.preview_track is not None:
                 session = self.current()
                 index = min(self.preview_track, len(session.tracks) - 1)
                 voice = synthesize(session.tracks[index].sound)
-                voices.append((voice, 0))
+                voices.append((voice, 0, 1.0))
                 preview_end = len(voice) + 512
             while not self.stop_event.is_set():
                 if not self.playing and frame >= preview_end:
@@ -270,20 +355,28 @@ class Engine:
                 if self.playing:
                     while next_frame < end:
                         session = self.current()
+                        if session is not cache_session:
+                            voice_cache.clear()
+                            cache_session = session
                         self.step = next_step % 16
+                        step_frames = RATE * 60 / session.bpm / 4
                         for track in session.tracks:
-                            if track.pattern[self.step] == "x":
-                                voices.append((synthesize(track.sound), next_frame))
+                            for hit in parse_pattern(track.pattern)[self.step].hits:
+                                key = (track.sound, hit.transpose)
+                                if key not in voice_cache:
+                                    voice_cache[key] = synthesize(track.sound, hit.transpose)
+                                voices.append((voice_cache[key], next_frame + round(hit.offset * step_frames), hit.velocity))
                         next_step += 1
-                        next_frame += round(RATE * 60 / session.bpm / 4)
+                        next_frame_exact += step_frames
+                        next_frame = round(next_frame_exact)
                 mixed = array("f", [0.0]) * 512
                 remaining = []
-                for voice, start in voices:
+                for voice, start, velocity in voices:
                     low, high = max(frame, start), min(end, start + len(voice))
                     for pos in range(low, high):
-                        mixed[pos - frame] += voice[pos - start]
+                        mixed[pos - frame] += voice[pos - start] * velocity
                     if end < start + len(voice):
-                        remaining.append((voice, start))
+                        remaining.append((voice, start, velocity))
                 voices = remaining
                 if process.stdin is None:
                     raise OSError("Salida de audio no disponible")
@@ -340,6 +433,7 @@ def run_tui(screen, path: Path):
     editing = False
     editor_lines: list[str] = []
     editor_row = editor_col = editor_top = 0
+    editor_left = 0
     message = "Bienvenido. Enter para comenzar."
 
     def current():
@@ -368,7 +462,7 @@ def run_tui(screen, path: Path):
                 line(4, "Pulsa Enter y luego p. Sonarán todas las pistas.")
                 line(7, "2 / CAMBIA UNA PISTA", curses.A_BOLD)
                 line(8, "Pulsa Tab: selecciona PISTAS. ↑↓ elige kick, snare...")
-                line(9, "←→ mueve ^ por 16 pasos; x toca y . calla.")
+                line(9, "←→ mueve ^; x toca, X acentúa, r repite, . calla.")
                 line(12, "3 / CAMBIA SU SONIDO", curses.A_BOLD)
                 line(13, "Pulsa Tab: selecciona SONIDO. ↑↓ elige onda, tono,")
                 line(14, "duración, caída o nivel; ←→ cambia el valor.")
@@ -383,10 +477,16 @@ def run_tui(screen, path: Path):
                 editor_top = max(0, min(editor_top, editor_row))
                 if editor_row >= editor_top + visible:
                     editor_top = editor_row - visible + 1
+                content_width = max(1, width - 6)
+                if editor_col < editor_left:
+                    editor_left = editor_col
+                elif editor_col >= editor_left + content_width:
+                    editor_left = editor_col - content_width + 1
                 for y in range(visible):
                     index = editor_top + y
                     if index < len(editor_lines):
-                        line(4 + y, f"{index + 1:3} {editor_lines[index]}", curses.A_REVERSE if index == editor_row else 0)
+                        visible_text = editor_lines[index][editor_left:editor_left + content_width]
+                        line(4 + y, f"{index + 1:3} {visible_text}", curses.A_REVERSE if index == editor_row else 0)
                 line(height - 3, message)
                 line(height - 2, f"{path}  |  línea {editor_row + 1}, columna {editor_col + 1}")
             else:
@@ -396,22 +496,24 @@ def run_tui(screen, path: Path):
                 for i, (name, value) in enumerate((("BPM", session.bpm), ("Volumen", session.volume))):
                     chosen = focus == "global" and selected == i
                     line(4 + i, f"{'>' if chosen else ' '} {name:8} {value}", curses.A_REVERSE if chosen else 0)
-                line(7, "PISTAS  ↑↓ elige  ←→ mueve ^  x golpe  . silencio")
+                line(7, "PISTAS  ↑↓ elige ←→ paso x golpe X acento r repite . calla")
                 max_visible = min(len(session.tracks), 4)
                 start_index = max(0, min(track_index - max_visible + 1, len(session.tracks) - max_visible))
                 for row, index in enumerate(range(start_index, start_index + max_visible)):
                     track = session.tracks[index]
                     is_active = focus == "tracks" and track_index == index
-                    line(8 + row, f"{'>' if is_active else ' '} {track.sound.name:10} {' '.join(track.pattern)}", curses.A_REVERSE if is_active else 0)
+                    symbols = " ".join(step_symbol(step) for step in parse_pattern(track.pattern))
+                    line(8 + row, f"{'>' if is_active else ' '} {track.sound.name:10} {symbols}", curses.A_REVERSE if is_active else 0)
                 if focus == "tracks":
-                    line(12, " " * (13 + 2 * cursor) + "^ paso " + str(cursor + 1))
+                    token = parse_pattern(session.tracks[track_index].pattern)[cursor].token
+                    line(12, " " * (13 + 2 * cursor) + "^ " + str(cursor + 1) + ": " + token)
                 sound = session.tracks[track_index].sound
                 line(14, f"SONIDO / {sound.name}  Tab para editar sus parámetros")
                 parameters = (("Onda", sound.wave), ("Frecuencia", f"{sound.hz:g} Hz"), ("Duración", f"{sound.tail} ms"), ("Caída", f"{sound.sweep}%"), ("Nivel", f"{sound.level}%"))
                 for i, (name, value) in enumerate(parameters):
                     chosen = focus == "sound" and selected == i
                     line(15 + i, f"{'>' if chosen else ' '} {name:11} {value}", curses.A_REVERSE if chosen else 0)
-                line(20, "p tocar/detener | Espacio escuchar | e código aquí | s guardar")
+                line(20, "p tocar/parar | Espacio escuchar | e código | s guardar")
                 line(21, "Tab sección | ? guía | l recargar archivo | q salir")
                 if engine.error:
                     message = "Audio: " + engine.error
@@ -421,7 +523,7 @@ def run_tui(screen, path: Path):
                     line(24, f"Código: {path}")
             if editing and not help_page and height >= 24 and width >= 60:
                 try:
-                    screen.move(4 + editor_row - editor_top, min(width - 2, 4 + editor_col))
+                    screen.move(4 + editor_row - editor_top, min(width - 2, 4 + editor_col - editor_left))
                 except curses.error:
                     pass
             screen.refresh()
@@ -536,15 +638,27 @@ def run_tui(screen, path: Path):
                     with lock:
                         session = replace(session, tracks=tuple(replace(track, sound=new_sound) if track.sound.name == sound.name else track for track in session.tracks))
                     source = sync_source(source, session)
-            elif key in (ord("x"), ord(".")) and focus == "tracks":
-                with lock:
-                    tracks = list(session.tracks)
-                    pattern = list(tracks[track_index].pattern)
-                    pattern[cursor] = chr(key)
-                    tracks[track_index] = replace(tracks[track_index], pattern="".join(pattern))
-                    session = replace(session, tracks=tuple(tracks))
-                source = sync_source(source, session)
-                cursor = (cursor + 1) % 16
+            elif key in (ord("x"), ord("X"), ord("."), ord("r")) and focus == "tracks":
+                tracks = list(session.tracks)
+                cells = [step.token for step in parse_pattern(tracks[track_index].pattern)]
+                old = cells[cursor]
+                if key == ord("r"):
+                    cells[cursor] = "[xxxx]" if old == "[xx]" else "[xx]"
+                else:
+                    cells[cursor] = chr(key)
+                tracks[track_index] = replace(tracks[track_index], pattern="".join(cells))
+                updated = replace(session, tracks=tuple(tracks))
+                candidate = sync_source(source, updated)
+                try:
+                    parse_session(candidate)
+                    with lock:
+                        session = updated
+                    source = candidate
+                    message = f"Paso {cursor + 1}: {cells[cursor]}"
+                    if key != ord("r"):
+                        cursor = (cursor + 1) % 16
+                except ValueError as exc:
+                    message = str(exc)
             elif key == ord(" "):
                 engine.start(preview_track=track_index)
                 message = f"Escuchando {session.tracks[track_index].sound.name}."
@@ -575,6 +689,7 @@ def run_tui(screen, path: Path):
             elif key == ord("e"):
                 editor_lines = source.splitlines() or [""]
                 editor_row = editor_col = editor_top = 0
+                editor_left = 0
                 editing = True
                 try:
                     curses.curs_set(1)

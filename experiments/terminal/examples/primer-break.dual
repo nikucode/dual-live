@@ -1,0 +1,17 @@
+# dual.live / primer break / todo se genera localmente
+# Abre con: dual-live --session examples/primer-break.dual
+bpm 190
+volume 80
+
+# sound nombre onda Hz duracion_ms caida nivel
+sound kick sine 50 300 65 100
+sound snare noise 1800 170 0 85
+sound hat noise 7000 55 0 45
+sound bass saw 55 260 0 45
+
+# 16 pasos por vuelta. X acentúa; [xx] divide un paso.
+track kick x...x...[xx]...x.x.
+track snare ....X.......[xX]...
+track hat x.x.x.x.x.x.x.x.
+# El bajo toca la nota base y luego sube siete semitonos.
+track bass x.......x{+7}.......

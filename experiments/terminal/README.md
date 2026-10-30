@@ -1,13 +1,13 @@
 # dual.live / estudio de ritmos offline
 
-Un instrumento de terminal para aprender síntesis y escribir ritmos con código. Necesita Python 3 y `aplay` para escuchar. No necesita conexión, paquetes Python ni samples descargados. En este equipo, `dual-live` está enlazado en `~/.local/bin`. En otra máquina, ejecuta `./install.sh` una vez desde esta carpeta; también puedes usar `./dual-live` sin instalar el comando global.
+Un instrumento de terminal para aprender síntesis y escribir ritmos con código. Necesita Python 3 y `aplay` para escuchar. No necesita conexión, paquetes Python ni samples descargados. Ejecuta `./install.sh` una vez desde esta carpeta para crear el comando `dual-live` en `~/.local/bin`; también puedes usar `./dual-live` sin instalarlo.
 
 ## Primera misión, paso a paso
 
 1. Abre una terminal de al menos **60 columnas y 24 filas** y escribe `dual-live`.
 2. Lee la pantalla de bienvenida y pulsa **Enter**. Puedes volver a verla con `?`.
 3. Pulsa **`p`** para tocar las pistas juntas; otra vez `p` las detiene. **Espacio** escucha el instrumento seleccionado.
-4. Pulsa **Tab** hasta **PISTAS**. Con `↑` y `↓` elige una. Con `←` y `→` mueve el cursor `^` por sus 16 pasos. Escribe `x` para tocar o `.` para callar.
+4. Pulsa **Tab** hasta **PISTAS**. Con `↑` y `↓` elige una. Con `←` y `→` mueve el cursor `^` por sus 16 pasos. Escribe `x` para tocar, `X` para acentuar, `r` para repetir dentro del paso o `.` para callar. `r` alterna entre dos y cuatro golpes.
 5. Pulsa **Tab** una vez más hasta **SONIDO**. Verás los parámetros de esa pista: onda, frecuencia, duración, caída y nivel propio. Elige uno con `↑` y `↓`; ajústalo con `←` y `→`. Puedes seguir tocando mientras cambias el sonido.
 6. Otro **Tab** vuelve a **GENERAL**, donde ajustas BPM (40–300) y volumen general (0–100).
 7. Pulsa **`e`** para escribir código **dentro de dual.live**. Usa **Ctrl+R** para aplicar sin parar el ritmo, **Ctrl+O** para aplicar y guardar, o **Ctrl+X** para aplicar y volver. Si hay un error, el sonido anterior sigue y puedes corregir la línea. También funcionan F5, F2 y Esc en terminales que envían esas teclas.
@@ -43,7 +43,29 @@ sound glitch square 440 90 30 75
 track glitch x...xx..x.x..xx.
 ```
 
-Cada `track` debe nombrar un `sound` definido en el archivo. El nivel propio es opcional en archivos anteriores: si falta, vale 100. Si varias pistas usan el mismo nombre de sonido, editarlo cambia todas esas pistas. Si el código tiene un error, la terminal indica la línea y conserva la última sesión válida. Los cambios válidos se aplican en los pasos siguientes; el ritmo no se reinicia. Esto es un lenguaje pequeño propio, pensado como puente hacia patrones más expresivos al estilo Strudel. Aún no admite notas distintas en cada paso, samples del usuario ni sintaxis de Strudel.
+Cada `track` debe nombrar un `sound` definido en el archivo. El nivel propio es opcional en archivos anteriores: si falta, vale 100. Si varias pistas usan el mismo nombre de sonido, editarlo cambia todas esas pistas. Si el código tiene un error, la terminal indica la línea y conserva la última sesión válida. Los cambios válidos se aplican en los pasos siguientes; el ritmo no se reinicia. Esto es un lenguaje pequeño propio, pensado como puente hacia patrones más expresivos al estilo Strudel. Todavía no admite nombres de notas, samples del usuario ni la sintaxis de Strudel.
+
+### Acentos, repeticiones y tono por golpe
+
+Cada pista conserva **16 pasos base**. Dentro de uno puedes escribir:
+
+| Símbolo | Resultado |
+| --- | --- |
+| `x` | Un golpe normal |
+| `X` | Un golpe más fuerte |
+| `.` | Silencio |
+| `[xx]` | Dos golpes que comparten el tiempo de un paso |
+| `[x.X.]` | Cuatro subpasos: golpe, silencio, acento, silencio |
+| `x{+7}` | Un golpe siete semitonos más agudo que el sonido base |
+| `x{-12}` | Un golpe una octava más grave |
+
+Los grupos admiten de 2 a 8 subpasos, los cambios de tono de −24 a +24 semitonos y la sesión hasta 64 golpes por vuelta para mantener razonable el trabajo del motor. En la vista de pistas, un número representa un paso subdividido y `^` un paso con tono modificado; selecciona ese paso para ver su expresión completa. Escribe expresiones avanzadas con `e` y **Ctrl+R**. Esto es una sintaxis propia y pequeña, no la mini-notación completa de Strudel.
+
+Prueba el ejemplo incluido desde la carpeta del prototipo:
+
+```bash
+./dual-live --session examples/primer-break.dual
+```
 
 ## Exportar y usar el taller visual
 
@@ -57,7 +79,7 @@ El WAV se genera localmente. `--web` abre el taller visual anterior en un navega
 ## Para desarrollar
 
 ```bash
-cd /home/minimodecoro/Projects/dual-live-investigacion/prototipo
+cd experiments/terminal
 python3 -B -m unittest -v test_studio.py test_terminal.py
 ```
 
